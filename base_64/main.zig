@@ -7,6 +7,12 @@ const Commands = enum {
     Decode,
 };
 
+const cmd_name_to_enum = [_]struct { []const u8, Commands, bool }{
+    .{ "help", .Help, false },
+    .{ "encode", .Encode, true },
+    .{ "decode", .Decode, true },
+};
+
 const ParseState = enum {
     CmdName,
     Argument,
@@ -25,28 +31,33 @@ pub fn main(init: std.process.Init) !void {
     _ = args.next();
 
     var cmd: Commands = undefined;
-    var arg: []const u8 = undefined;
-    foo: switch (ParseState.CmdName) {
-        .CmdName => {
-            const cmd_name = args.next() orelse return CommandError.MissingCommand;
-            if (std.mem.eql(u8, cmd_name, "help")) {
-                cmd = .Help;
-                continue :foo .Terminal;
-            } else if (std.mem.eql(u8, cmd_name, "encode")) {
-                cmd = .Encode;
-                continue :foo .Argument;
-            } else if (std.mem.eql(u8, cmd_name, "decode")) {
-                cmd = .Decode;
-                continue :foo .Argument;
-            } else {
-                return CommandError.UnexpectedCommand;
-            }
-        },
-        .Argument => {
-            arg = args.next() orelse return CommandError.MissingArgument;
-            continue :foo .Terminal;
-        },
-        .Terminal => if (args.next() != null) return CommandError.UnexpectedArgument,
+    var inpt: []const u8 = undefined;
+
+    var state = ParseState.CmdName;
+    while (args.next()) |arg| {
+        switch (state) {
+            .CmdName => {
+                cmd = cmd_resolver: {
+                    for (cmd_name_to_enum) |c| {
+                        if (std.mem.eql(u8, arg, c.@"0")) {
+                            state = if (c.@"2") .Argument else .Terminal;
+                            break :cmd_resolver c.@"1";
+                        }
+                    }
+                    return CommandError.UnexpectedCommand;
+                };
+            },
+            .Argument => {
+                inpt = arg;
+                state = .Terminal;
+            },
+            .Terminal => return CommandError.UnexpectedArgument,
+        }
+    }
+    switch (state) {
+        .CmdName => return CommandError.MissingCommand,
+        .Argument => return CommandError.MissingArgument,
+        .Terminal => {},
     }
 
     const io = init.io;
@@ -60,8 +71,8 @@ pub fn main(init: std.process.Init) !void {
     const b64: Base64 = .init();
 
     switch (cmd) {
-        .Decode => try stdout.print("{s}\n", .{try b64.decodeString(allocator, arg)}),
-        .Encode => try stdout.print("{s}\n", .{try b64.encodeString(allocator, arg)}),
+        .Decode => try stdout.print("{s}\n", .{try b64.decodeString(allocator, inpt)}),
+        .Encode => try stdout.print("{s}\n", .{try b64.encodeString(allocator, inpt)}),
         .Help => try stdout.print("{s}\n", .{
             \\encode or decode Base64 string
             \\
