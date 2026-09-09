@@ -4,7 +4,8 @@ const Allocator = std.mem.Allocator;
 const BTreeInternalError = error{
     OutOfCapacity,
     OutOfOrderInsertion,
-    SplittingNonFullNode,
+    IllegalSplit,
+    IllegalInsert,
 };
 
 // adding a new element:
@@ -214,19 +215,7 @@ fn BTreeInternal(comptime N: usize, comptime T: type) type {
     };
 }
 
-const FindResult = union(enum) {
-    expected: usize,
-    actual: usize,
-
-    fn flatten(self: FindResult) usize {
-        switch (self) {
-            .expected => |v| return v,
-            .actual => |v| return v,
-        }
-    }
-};
-
-fn find(comptime N: usize, comptime T: type, node: BTreeNode(N, T), e: T) FindResult {
+fn find(comptime N: usize, comptime T: type, node: BTreeNode(N, T), e: T) usize {
     const buf = get_buf: switch (node.node) {
         .internal => |n| break :get_buf n.buf,
         .leaf => |n| break :get_buf n.buf,
@@ -234,14 +223,8 @@ fn find(comptime N: usize, comptime T: type, node: BTreeNode(N, T), e: T) FindRe
     var start, var end = .{ 0, N };
     while (true) {
         const mid = (end + start) / 2;
-        if (buf[mid] == e) {
-            return FindResult{
-                .actual = mid,
-            };
-        } else if (start == end) {
-            return FindResult{
-                .expected = mid,
-            };
+        if (buf[mid] == e or start == end) {
+            return mid;
         } else if (mid > e) {
             end = mid - 1;
         } else {
@@ -273,62 +256,164 @@ fn CommonInputType(comptime N: usize, comptime T: type) type {
 
 fn BTreeNode(comptime N: usize, comptime T: type) type {
     return struct {
-        node: NodeUnion,
-        back_ptr: ?BackPtr(Self) = null,
+        buf: []T,
+        len: usize = 0,
+        next: ?[]*Self = null,
 
-        const NodeUnion = union(enum) {
-            leaf: BTreeLeaf(N, T),
-            internal: BTreeInternal(N, T),
-        };
         const Self = @This();
 
-        fn fromLeaf(allocator: Allocator, leaf: *BTreeLeaf(N, T)) *Self {
-            const node = try allocator.create(Self);
-            node.* = .{
-                .node = .{
-                    .leaf = leaf,
-                },
+        fn initLeaf(allocator: Allocator) !Self {
+            return .{
+                .buf = try allocator.alloc(T, N),
             };
-            return node;
         }
 
-        fn fromInternal(allocator: Allocator, internal: *BTreeInternal(N, T)) *Self {
-            const node = try allocator.create(Self);
-            node.* = .{
-                .node = .{
-                    .internal = internal,
-                },
-            };
-            return node;
+        fn initInternal(allocator: Allocator) !Self {
+            var n: Self = try .initLeaf(allocator);
+            errdefer n.deinit(allocator);
+            n.next = try allocator.alloc(*Self, N + 1);
+            return n;
         }
 
-        fn insert(self: Self, allocator: Allocator, e: CommonInputType(N, T), i: usize) !void {
-            switch (self.node) {
-                .leaf => |n| try n.insert(allocator, e.value, i),
-                .internal => |n| try n.insert(allocator, e.split_node, i),
+        fn initFromSplitNode(allocator: Allocator, e: T, l: *Self, r: *Self) !Self {
+            var n: Self = try .initInternal(allocator);
+            n.buf[0] = e;
+            if (n.next) |next| {
+                next[0] = l;
+                next[1] = r;
             }
+            n.len = 1;
+            return n;
         }
 
-        fn split(self: Self, allocator: Allocator, e: CommonInputType(N, T), i: usize) !SplitNode(N, T) {
-            switch (self.node) {
-                .leaf => |n| return try n.split(allocator, e.value, i),
-                .internal => |n| return try n.split(allocator, e.split_node, i),
+        fn deinit(self: Self, allocator: Allocator) void {
+            allocator.free(self.buf);
+            if (self.next) |next| allocator.free(next);
+        }
+
+        fn range(self: Self, allocator: Allocator, l: usize, r: usize) !Self {
+            var n: Self = try .initLeaf(allocator);
+            @memcpy(n.buf[0..(r - l)], self.buf[l..r]);
+            if (self.next) |next| {
+                n.next = try allocator.alloc(*Self, N + 1);
+                @memcpy(n.next[0..(r - l + 1)], next[l..(r + 1)]);
             }
+            n.len = r - l;
+            return n;
+        }
+
+        fn find(self: Self, e: T) usize {
+            var start, var end = .{ 0, N };
+            while (true) {
+                const mid = (end + start) / 2;
+                if (self.buf[mid] == e or start == end) {
+                    return mid;
+                } else if (mid > e) {
+                    end = mid - 1;
+                } else {
+                    start = mid + 1;
+                }
+            }
+            unreachable;
+        }
+
+        fn split(self: Self, allocator: Allocator, e: T, i: usize, l: ?*Self, r: ?*Self) !struct { *Self, T, *Self } {
+            if (self.len != N) return BTreeInternalError.IllegalSplit;
+
+            var left: Self = try allocator.create(Self);
+            errdefer allocator.destroy(left);
+            var right: Self = try allocator.create(Self);
+            errdefer allocator.destroy(right);
+            var center: T = undefined;
+
+            if (i == N / 2) {
+                left.* = try self.range(allocator, 0, N / 2);
+                errdefer left.deinit(allocator);
+                if (left.next) |next| next[N / 2] = l orelse return BTreeInternalError.IllegalSplit;
+                right.* = try self.range(allocator, N / 2, N);
+                errdefer right.deinit(allocator);
+                if (right.next) |next| next[0] = r orelse return BTreeInternalError.IllegalSplit;
+                center = e;
+            } else if (i > N / 2) {
+                left.* = try self.range(allocator, 0, N / 2);
+                errdefer left.deinit(allocator);
+                right.* = try self.range(allocator, 1 + N / 2, N);
+                errdefer right.deinit(allocator);
+                try right.insert(allocator, e, i - N / 2 - 1, l, r);
+                center = self.buf[N / 2];
+            } else {
+                left.* = try self.range(allocator, 0, N / 2 - 1);
+                errdefer left.deinit(allocator);
+                try left.insert(allocator, e, i, l, r);
+                right.* = try self.range(allocator, N / 2, N);
+                center = self.buf[N / 2 - 1];
+            }
+            return .{ left, center, right };
+        }
+
+        fn insert(self: *Self, e: T, i: usize, l: ?*Self, r: ?*Self) !void {
+            if (self.len == N) return BTreeInternalError.OutOfCapacity;
+            if (i > 0 and self.buf[i - 1] > e) return BTreeInternalError.OutOfOrderInsertion;
+            if (i < self.len and self.buf[i] < e) return BTreeInternalError.OutOfOrderInsertion;
+
+            for (0..(self.len - i)) |idx| {
+                self.buf[self.len - idx] = self.buf[self.len - idx - 1];
+            }
+            self.buf[i] = e;
+
+            if (self.next) |next| {
+                const left = l orelse return BTreeInternalError.IllegalInsert;
+                const right = r orelse return BTreeInternalError.IllegalInsert;
+
+                for (0..(self.len - i)) |idx| {
+                    next[self.len + 1 - idx] = next[self.len - idx];
+                }
+                self.next[i] = left;
+                self.next[i + 1] = right;
+            } else if (l != null or r != null) {
+                return BTreeInternalError.IllegalInsert;
+            }
+
+            self.len += 1;
         }
     };
 }
 
-const BTreeTraversalLLNode = struct {
-    i: usize,
-    next: ?*BTreeTraversalLLNode = null,
-
-    fn free_chain(self: *const BTreeTraversalLLNode, allocator: Allocator) void {
-        if (self.next) |next| next.free_chain(allocator);
-        allocator.destroy(self);
-    }
-};
-
 pub fn BTree(comptime N: usize, comptime T: type) type {
+    const BTreeTraversalLLNode = struct {
+        n: ?*BTreeNode(N, T) = null,
+        i: usize = 0,
+        next: ?*Self = null,
+        prev: ?*Self = null,
+
+        const Self = @This();
+
+        fn connect(self: ?*Self, allocator: Allocator, node: *const BTreeNode(N, T), idx: usize) !*Self {
+            const new_node = try allocator.create(Self);
+            new_node.* = .{
+                .n = node,
+                .i = idx,
+                .next = self,
+            };
+            self.prev = new_node;
+            return new_node;
+        }
+
+        fn free_chain(self: *const Self, allocator: Allocator) void {
+            if (self.next) |next| next.free_chain(allocator);
+            allocator.destroy(self);
+        }
+
+        fn free_nodes(self: *Self, allocator: Allocator) void {
+            if (self.prev) |prev| prev.free_nodes(allocator);
+            if (self.n) |n| allocator.destroy(n);
+        }
+
+        fn free_desc(self: *Self, allocator: Allocator) void {
+            if (self.prev) |prev| prev.free_nodes(allocator);
+        }
+    };
+
     return struct {
         root: *T_Node,
 
@@ -342,54 +427,35 @@ pub fn BTree(comptime N: usize, comptime T: type) type {
         }
 
         pub fn insert(self: *Self, allocator: Allocator, e: T) !void {
+            var traversal_chain: *BTreeTraversalLLNode = try allocator.create(BTreeTraversalLLNode);
+            traversal_chain.* = .{};
+
             var node = self.root;
-            while (true) switch (node.node) {
-                .internal => |n| node = n.next[find(N, T, n, e).flatten()],
-                .leaf => {},
-            };
-
-            var traversal_chain: ?*BTreeTraversalLLNode = null;
-
-            switch (find(N, T, node, e)) {
-                .expected => |i| {
-                    node.insert(allocator, .fromValue(e), i) catch |err| switch (err) {
-                        BTreeInternalError.OutOfCapacity => {
-                            var split_node = try node.split(allocator, .fromValue(e), i);
-                            while (node.back_ptr) |ptr| {
-                                ptr.parent.insert(allocator, split_node, ptr.idx) catch |err2| switch (err2) {
-                                    BTreeInternalError.OutOfCapacity => {
-                                        const traversal_node = try allocator.create(BTreeTraversalLLNode);
-                                        traversal_node.* = .{
-                                            .i = ptr.idx,
-                                            .next = traversal_chain,
-                                        };
-                                        traversal_chain = traversal_node;
-                                        split_node = node.split(allocator, split_node, ptr.idx);
-                                        node = ptr.parent;
-                                        continue;
-                                    },
-                                    else => return err2,
-                                };
-                                break;
-                            } else {
-                                self.root = .fromInternal(allocator, .initFromSplitNode(allocator, split_node));
-                            }
-                            while (traversal_chain) |traversal_node| {
-                                const nn = node.node.internal.next[traversal_node.i];
-                                allocator.destroy(node);
-                                node = nn;
-                                const ntraversal_node = traversal_node.next;
-                                allocator.destroy(traversal_node);
-                                traversal_node = ntraversal_node;
-                            } else {
-                                allocator.destroy(node);
-                            }
-                        },
-                        else => return err,
-                    };
-                },
-                .actual => {},
+            while (true) {
+                traversal_chain = try traversal_chain.connect(allocator, node, node.find(N, T, node, e));
+                if (node.next) |next| {
+                    node = next[traversal_chain.i];
+                    continue;
+                }
+                break;
             }
+            defer traversal_chain.free_chain(allocator);
+
+            var l: ?*T_Node, var elem, var r: ?*T_Node = .{ null, e, null };
+            while (traversal_chain.n) |n| {
+                if (n.len == N) {
+                    l, elem, r = try n.split(allocator, elem, traversal_chain.i, l, r);
+                    traversal_chain = traversal_chain.next orelse unreachable;
+                } else {
+                    try n.insert(elem, traversal_chain.i, l, r);
+                    break;
+                }
+            } else {
+                const tmp = try allocator.create(T_Node);
+                tmp.* = try .initFromSplitNode(allocator, elem, l.?, r.?);
+                self.root = tmp;
+            }
+            traversal_chain.free_desc(allocator);
         }
 
         pub fn delete(self: *Self, allocator: Allocator, e: T) void {
