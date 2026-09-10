@@ -6,6 +6,7 @@ const BTreeInternalError = error{
     OutOfOrderInsertion,
     IllegalSplit,
     IllegalInsert,
+    InvalidIndex,
 };
 
 // adding a new element:
@@ -84,11 +85,14 @@ fn BTreeNode(comptime N: usize, comptime T: type) type {
         }
 
         fn range(self: Self, allocator: Allocator, l: usize, r: usize) !Self {
+            if (l >= r or r > self.len) return BTreeInternalError.InvalidIndex;
             var n: Self = try .initLeaf(allocator);
+            errdefer n.deinit(allocator);
             @memcpy(n.buf[0..(r - l)], self.buf[l..r]);
             if (self.next) |next| {
-                n.next = try allocator.alloc(*Self, N + 1);
-                @memcpy(n.next[0..(r - l + 1)], next[l..(r + 1)]);
+                const n_next = try allocator.alloc(*Self, N + 1);
+                @memcpy(n_next[0..(r - l + 1)], next[l..(r + 1)]);
+                n.next = n_next;
             }
             n.len = r - l;
             return n;
@@ -169,6 +173,120 @@ fn BTreeNode(comptime N: usize, comptime T: type) type {
             self.len += 1;
         }
     };
+}
+
+fn test_init_mem_leak(allocator: Allocator) !void {
+    const Node = BTreeNode(4, u8);
+
+    var a: Node = try .initLeaf(allocator);
+    defer a.deinit(allocator);
+
+    var b: Node = try .initInternal(allocator);
+    defer b.deinit(allocator);
+
+    var c: Node = try .initFromSplitNode(allocator, 'a', &a, &b);
+    defer c.deinit(allocator);
+}
+
+test "b_tree_node_init_deinit" {
+    const allocator = std.testing.allocator;
+
+    const Node = BTreeNode(4, u8);
+
+    var a: Node = try .initLeaf(allocator);
+    defer a.deinit(allocator);
+    try std.testing.expectEqual(null, a.next);
+    try std.testing.expectEqual(0, a.len);
+
+    var b: Node = try .initInternal(allocator);
+    defer b.deinit(allocator);
+    _ = b.next orelse unreachable;
+    try std.testing.expectEqual(0, b.len);
+
+    const c: Node = try .initFromSplitNode(allocator, 'a', &a, &b);
+    defer c.deinit(allocator);
+    if (c.next) |next| {
+        try std.testing.expectEqual(&a, next[0]);
+        try std.testing.expectEqual(&b, next[1]);
+    } else {
+        unreachable;
+    }
+    try std.testing.expectEqual('a', c.buf[0]);
+    try std.testing.expectEqual(1, c.len);
+
+    try std.testing.checkAllAllocationFailures(allocator, test_init_mem_leak, .{});
+}
+
+fn test_range_mem_leak(allocator: Allocator) !void {
+    const Node = BTreeNode(4, u8);
+
+    var a_contents = [_]u8{ 'h', 'e', 'l', 'l', 'o' };
+    var b_contents = [_]u8{ 'w', 'o', 'r', 'l', 'd' };
+    var c_contents = [_]u8{' '};
+
+    var a: Node = .{
+        .buf = a_contents[0..],
+        .len = 5,
+    };
+
+    var b: Node = .{
+        .buf = b_contents[0..],
+        .len = 5,
+    };
+
+    var c_next = [_]*Node{ &a, &b };
+    const c: Node = .{
+        .buf = c_contents[0..],
+        .len = 1,
+        .next = c_next[0..],
+    };
+
+    const d = try a.range(allocator, 1, 3);
+    defer d.deinit(allocator);
+
+    const e = try c.range(allocator, 0, 1);
+    defer e.deinit(allocator);
+}
+
+test "b_tree_range" {
+    const allocator = std.testing.allocator;
+
+    const Node = BTreeNode(6, u8);
+
+    var a_contents = [_]u8{ 'h', 'e', 'l', 'l', 'o' };
+    var b_contents = [_]u8{ 'w', 'o', 'r', 'l', 'd' };
+    var c_contents = [_]u8{' '};
+
+    var a: Node = .{
+        .buf = a_contents[0..],
+        .len = 5,
+    };
+
+    var b: Node = .{
+        .buf = b_contents[0..],
+        .len = 5,
+    };
+
+    var c_next = [_]*Node{ &a, &b };
+    const c: Node = .{
+        .buf = c_contents[0..],
+        .len = 1,
+        .next = c_next[0..],
+    };
+
+    const d = try a.range(allocator, 1, 3);
+    defer d.deinit(allocator);
+    try std.testing.expectEqualSlices(u8, a_contents[1..3], d.buf[0..d.len]);
+    try std.testing.expectEqual(null, d.next);
+    try std.testing.expectEqual(2, d.len);
+
+    const e = try c.range(allocator, 0, 1);
+    defer e.deinit(allocator);
+    try std.testing.expectEqualSlices(u8, c_contents[0..], e.buf[0..e.len]);
+    try std.testing.expectEqualSlices(*Node, c_next[0..], e.next.?[0 .. e.len + 1]);
+    try std.testing.expectEqual(1, e.len);
+
+    try std.testing.checkAllAllocationFailures(allocator, test_range_mem_leak, .{});
 }
 
 pub fn BTree(comptime N: usize, comptime T: type) type {
