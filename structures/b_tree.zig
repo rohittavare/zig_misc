@@ -55,7 +55,6 @@ fn BTreeNode(comptime N: usize, comptime T: type) type {
 
         const Self = @This();
 
-
         //////////////////////////////
         //   Allocators             //
         //////////////////////////////
@@ -133,7 +132,7 @@ fn BTreeNode(comptime N: usize, comptime T: type) type {
         /// simulates inserting value `e` into this node and returns dynamically allocated nodes representing the
         /// left half, right half and also median value of splitting the resulting oversized node.
         /// in some cases, child pointers may also accompany the value `e` which will be appropriately set in child nodes
-        /// 
+        ///
         /// this method is needed in the BTree insertion algorithm, where nodes must retain a fixed max size
         /// nodes exceeding this size must be split in half into a median value & two accompanying child nodes
         /// the ordering of the node values & pointers must reflect the insertion of the critical value which cause nodes to exceed capacity
@@ -364,18 +363,18 @@ test "b_tree_insert_leaf" {
 test "b_tree_insert_internal" {
     const Node = BTreeNode(6, u8);
 
-    var node_contents = [_]u8{'b', 'g', 'l', 'y', 0, 0};
+    var node_contents = [_]u8{ 'b', 'g', 'l', 'y', 0, 0 };
 
     var nodes: [9]Node = undefined;
     var node_ptrs: [9]*Node = undefined;
-    inline for(0..9) |i| {
+    inline for (0..9) |i| {
         nodes[i] = .{
             .buf = node_contents[0..],
             .len = 0,
         };
         node_ptrs[i] = &nodes[i];
     }
-    
+
     var node_next_contents = [_]*Node{
         node_ptrs[0],
         node_ptrs[1],
@@ -393,7 +392,7 @@ test "b_tree_insert_internal" {
 
     try std.testing.expectError(BTreeInternalError.IllegalInsert, node.insert('a', 0, null, node_ptrs[6]));
     try std.testing.expectError(BTreeInternalError.IllegalInsert, node.insert('a', 0, node_ptrs[5], null));
-    
+
     try std.testing.expectEqual(4, node.len);
     try node.insert('a', 0, node_ptrs[5], node_ptrs[6]);
     if (node.next) |next| {
@@ -405,7 +404,7 @@ test "b_tree_insert_internal" {
             node_ptrs[2],
             node_ptrs[3],
             node_ptrs[4],
-        }, next[0..node.len+1]);
+        }, next[0 .. node.len + 1]);
     } else {
         unreachable;
     }
@@ -420,7 +419,7 @@ test "b_tree_insert_internal" {
             node_ptrs[3],
             node_ptrs[7],
             node_ptrs[8],
-        }, next[0..node.len+1]);
+        }, next[0 .. node.len + 1]);
     } else {
         unreachable;
     }
@@ -429,7 +428,7 @@ test "b_tree_insert_internal" {
 fn test_leaf_split_mem_leak(allocator: Allocator) !void {
     const Node = BTreeNode(6, u8);
 
-    var node_contents = [_]u8{ 'a', 'g', 'k', 'm', 't', 'y'};
+    var node_contents = [_]u8{ 'a', 'g', 'k', 'm', 't', 'y' };
     var node: Node = .{
         .buf = node_contents[0..],
         .len = 6,
@@ -447,9 +446,9 @@ test "b_tree_split_leaf" {
 
     const Node = BTreeNode(6, u8);
 
-    var l: *Node, var e: u8, var r: *Node = .{undefined, undefined, undefined};
+    var l: *Node, var e: u8, var r: *Node = .{ undefined, undefined, undefined };
 
-    var node_contents = [_]u8{ 'a', 'g', 'k', 'm', 't', 'y'};
+    var node_contents = [_]u8{ 'a', 'g', 'k', 'm', 't', 'y' };
     var node: Node = .{
         .buf = node_contents[0..],
         .len = 4,
@@ -492,7 +491,7 @@ test "b_tree_split_leaf" {
         try std.testing.expectEqualSlices(u8, "mty", r.buf[0..r.len]);
         try std.testing.expectEqual(null, r.next);
     }
-    
+
     {
         l, e, r = try node.split(allocator, 'n', 4, null, null);
         defer allocator.destroy(l);
@@ -513,18 +512,18 @@ test "b_tree_split_leaf" {
 
 fn test_internal_split_mem_leak(allocator: Allocator) !void {
     const Node = BTreeNode(6, u8);
-    var node_contents = [_]u8{ 'a', 'g', 'k', 'm', 't', 'y'};
-    
+    var node_contents = [_]u8{ 'a', 'g', 'k', 'm', 't', 'y' };
+
     var nodes: [9]Node = undefined;
     var node_ptrs: [9]*Node = undefined;
-    inline for(0..9) |i| {
+    inline for (0..9) |i| {
         nodes[i] = .{
             .buf = node_contents[0..],
             .len = 0,
         };
         node_ptrs[i] = &nodes[i];
     }
-    
+
     var node_next_contents = [_]*Node{
         node_ptrs[0],
         node_ptrs[1],
@@ -539,7 +538,7 @@ fn test_internal_split_mem_leak(allocator: Allocator) !void {
         .len = 6,
         .next = node_next_contents[0..],
     };
-    
+
     const l, _, const r = try node.split(allocator, 'b', 1, node_ptrs[7], node_ptrs[8]);
     defer allocator.destroy(l);
     defer allocator.destroy(r);
@@ -552,18 +551,18 @@ test "b_tree_split_internal" {
 
     const Node = BTreeNode(6, u8);
 
-    var node_contents = [_]u8{ 'a', 'g', 'k', 'm', 't', 'y'};
-    
+    var node_contents = [_]u8{ 'a', 'g', 'k', 'm', 't', 'y' };
+
     var nodes: [9]Node = undefined;
     var node_ptrs: [9]*Node = undefined;
-    inline for(0..9) |i| {
+    inline for (0..9) |i| {
         nodes[i] = .{
             .buf = node_contents[0..],
             .len = 0,
         };
         node_ptrs[i] = &nodes[i];
     }
-    
+
     var node_next_contents = [_]*Node{
         node_ptrs[0],
         node_ptrs[1],
@@ -579,7 +578,7 @@ test "b_tree_split_internal" {
         .next = node_next_contents[0..],
     };
 
-    var l: *Node, var e: u8, var r: *Node = .{undefined, undefined, undefined};
+    var l: *Node, var e: u8, var r: *Node = .{ undefined, undefined, undefined };
 
     try std.testing.expectError(BTreeInternalError.IllegalSplit, node.split(allocator, 'l', 3, node_ptrs[7], null));
     try std.testing.expectError(BTreeInternalError.IllegalSplit, node.split(allocator, 'l', 3, null, node_ptrs[8]));
@@ -599,7 +598,7 @@ test "b_tree_split_internal" {
                 node_ptrs[7],
                 node_ptrs[8],
                 node_ptrs[2],
-            }, next[0..l.len+1]);
+            }, next[0 .. l.len + 1]);
         } else {
             unreachable;
         }
@@ -611,7 +610,7 @@ test "b_tree_split_internal" {
                 node_ptrs[4],
                 node_ptrs[5],
                 node_ptrs[6],
-            }, next[0..r.len+1]);
+            }, next[0 .. r.len + 1]);
         } else {
             unreachable;
         }
@@ -632,7 +631,7 @@ test "b_tree_split_internal" {
                 node_ptrs[1],
                 node_ptrs[2],
                 node_ptrs[7],
-            }, next[0..l.len+1]);
+            }, next[0 .. l.len + 1]);
         } else {
             unreachable;
         }
@@ -644,12 +643,12 @@ test "b_tree_split_internal" {
                 node_ptrs[4],
                 node_ptrs[5],
                 node_ptrs[6],
-            }, next[0..r.len+1]);
+            }, next[0 .. r.len + 1]);
         } else {
             unreachable;
         }
     }
-    
+
     {
         l, e, r = try node.split(allocator, 'n', 4, node_ptrs[7], node_ptrs[8]);
         defer allocator.destroy(l);
@@ -665,7 +664,7 @@ test "b_tree_split_internal" {
                 node_ptrs[1],
                 node_ptrs[2],
                 node_ptrs[3],
-            }, next[0..l.len+1]);
+            }, next[0 .. l.len + 1]);
         } else {
             unreachable;
         }
@@ -677,7 +676,7 @@ test "b_tree_split_internal" {
                 node_ptrs[8],
                 node_ptrs[5],
                 node_ptrs[6],
-            }, next[0..r.len+1]);
+            }, next[0 .. r.len + 1]);
         } else {
             unreachable;
         }
@@ -686,43 +685,19 @@ test "b_tree_split_internal" {
     try std.testing.checkAllAllocationFailures(allocator, test_internal_split_mem_leak, .{});
 }
 
+/// BTrees are a datastructure used to store set of data in order
+/// related to B+Trees which databases use to manage indicies on disk
+/// BTrees are a more generic form of a BST, storing up to N values
+/// and N+1 pointers to child nodes
 pub fn BTree(comptime N: usize, comptime T: type) type {
-    const BTreeTraversalLLNode = struct {
-        n: ?*BTreeNode(N, T) = null,
-        i: usize = 0,
-        next: ?*Self = null,
-        prev: ?*Self = null,
-
-        const Self = @This();
-
-        fn connect(self: ?*Self, allocator: Allocator, node: *const BTreeNode(N, T), idx: usize) !*Self {
-            const new_node = try allocator.create(Self);
-            new_node.* = .{
-                .n = node,
-                .i = idx,
-                .next = self,
-            };
-            self.prev = new_node;
-            return new_node;
-        }
-
-        fn free_chain(self: *const Self, allocator: Allocator) void {
-            if (self.next) |next| next.free_chain(allocator);
-            allocator.destroy(self);
-        }
-
-        fn free_nodes(self: *Self, allocator: Allocator) void {
-            if (self.prev) |prev| prev.free_nodes(allocator);
-            if (self.n) |n| allocator.destroy(n);
-        }
-
-        fn free_desc(self: *Self, allocator: Allocator) void {
-            if (self.prev) |prev| prev.free_nodes(allocator);
-        }
+    const TraversalPath = struct {
+        n: []*BTreeNode(N, T),
+        i: []usize,
     };
 
     return struct {
         root: *T_Node,
+        depth: usize,
 
         const T_Node = BTreeNode(N, T);
         const Self = @This();
@@ -730,39 +705,62 @@ pub fn BTree(comptime N: usize, comptime T: type) type {
         pub fn init(allocator: Allocator) !Self {
             return Self{
                 .root = T_Node.fromLeaf(allocator, .init(allocator)),
+                .depth = 1,
             };
         }
 
+        /// Add a new element `e` into the BTree. Algorithm as follows:
+        /// 1. traverse the BTree to find an index within a leaf node
+        /// 2. attempt to insert the element in the leaf node. if the node overflows:
+        /// 3. split node into two halves & a median
+        /// 4. Attempt to insert the median into the parent node,
+        ///    attaching the two halves as child nodes around the inserted median
+        /// 5. if parent node overflows, repeat 3 & 4 with parent node
+        ///    until a node inserts cleanly.
+        ///    if root node overflows, create a new node to contain the median & child pointer
+        /// Inserting from the leaf & breaking saturated nodes equally & distributing upwards
+        /// ensures the tree stays balanced, ensuring each node remains at roughly the same capacity
         pub fn insert(self: *Self, allocator: Allocator, e: T) !void {
-            var traversal_chain: *BTreeTraversalLLNode = try allocator.create(BTreeTraversalLLNode);
-            traversal_chain.* = .{};
+            const traversal: TraversalPath = .{
+                .n = try allocator.alloc(*T_Node, self.depth),
+                .i = try allocator.alloc(usize, self.depth),
+            };
+            defer allocator.free(traversal.n);
+            defer allocator.free(traversal.i);
 
+            // find the leaf node where the element should be inserted
+            // keeping track of each node we've visited in case we need to back track
             var node = self.root;
-            while (true) {
-                traversal_chain = try traversal_chain.connect(allocator, node, node.find(e));
-                if (node.next) |next| {
-                    node = next[traversal_chain.i];
-                    continue;
-                }
-                break;
+            traversal.n[self.depth - 1] = node;
+            traversal.i[self.depth - 1] = node.find(e);
+            for (2..self.depth + 1) |i| {
+                node = node.next.?[traversal.i[self.depth - i + 1]];
+                traversal.n[self.depth - i] = node;
+                traversal.i[self.depth - i] = i;
             }
-            defer traversal_chain.free_chain(allocator);
 
-            var l: ?*T_Node, var elem, var r: ?*T_Node = .{ null, e, null };
-            while (traversal_chain.n) |n| {
-                if (n.len == N) {
-                    l, elem, r = try n.split(allocator, elem, traversal_chain.i, l, r);
-                    traversal_chain = traversal_chain.next orelse unreachable;
-                } else {
-                    try n.insert(elem, traversal_chain.i, l, r);
-                    break;
+            // starting from the bottom of our traversal chain attempt to insert our element
+            // if our node overflows, split it and move up the traversal chain.
+            // note: after our first insertion attempt, we are no longer just inserting our target element
+            // we are actually building and attempting to insert a whole new subtree
+            // replacing nodes in our traversal chain.
+            const split_depth = insert: {
+                var l: ?*T_Node, var elem, var r: ?*T_Node = .{ null, e, null };
+                for (traversal.n, traversal.i, 0..) |n, i, idx| {
+                    if (n.len == N) {
+                        l, elem, r = try n.split(allocator, elem, i, l, r);
+                    } else {
+                        try n.insert(elem, i, l, r);
+                        break :insert idx;
+                    }
                 }
-            } else {
                 const tmp = try allocator.create(T_Node);
+                errdefer allocator.destroy(tmp);
                 tmp.* = try .initFromSplitNode(allocator, elem, l.?, r.?);
                 self.root = tmp;
-            }
-            traversal_chain.free_desc(allocator);
+            } orelse self.depth;
+            // free all the nodes below our split depth (replaced)
+            for (traversal.n, 0..split_depth) |n, _| allocator.destroy(n);
         }
 
         pub fn delete(self: *Self, allocator: Allocator, e: T) void {
@@ -780,5 +778,94 @@ pub fn BTree(comptime N: usize, comptime T: type) type {
             _ = l;
             _ = r;
         }
+
+        // performing recursive DFS will guarantees our stack
+        // does not exceed tree depth
+        fn _recursive_free(allocator: Allocator, node: *T_Node) void {
+            if (node.next) |next| {
+                for (0..node.len + 1) |i| {
+                    _recursive_free(allocator, next[i]);
+                }
+            }
+            node.deinit(allocator);
+            allocator.destroy(node);
+        }
+
+        pub fn deinit(self: Self, allocator: Allocator) void {
+            _recursive_free(allocator, self.root);
+        }
     };
 }
+
+/// allow ourselves to build a u8 BTree using compiletime specified structs
+/// useful for writing readable test cases
+fn literal_btree(comptime N: usize, comptime literal: anytype, allocator: Allocator) !BTree(N, u8) {
+    const root, const depth = try _recursive_build_tree(N, literal, allocator);
+    return .{ .root = root, .depth = depth };
+}
+
+fn _recursive_build_tree(comptime N: usize, comptime literal: anytype, allocator: Allocator) !struct { *BTreeNode(N, u8), usize } {
+    switch (@typeInfo(@TypeOf(literal))) {
+        .@"struct" => |s| {
+            const len = s.field_types.len;
+            if (len > 2 and len % 2 == 1 and len / 2 <= N) {
+                var depth: usize = undefined;
+                var vals: [len / 2]u8 = undefined;
+                var ptrs: [1 + len / 2]*BTreeNode(N, u8) = undefined;
+                comptime var i = 0;
+                inline for (s.field_names, s.field_types) |n, t| {
+                    if (i % 2 == 0) {
+                        ptrs[i / 2], depth = try _recursive_build_tree(N, @field(literal, n), allocator);
+                    } else {
+                        if (t == comptime_int) {
+                            vals[i / 2] = @as(u8, @field(literal, n));
+                        } else @compileError("internal nodes must contain u8");
+                    }
+                    i += 1;
+                }
+                var node = try allocator.create(BTreeNode(N, u8));
+                node.* = try .initInternal(allocator);
+                node.len = len / 2;
+                @memcpy(node.buf[0..vals.len], vals[0..]);
+                @memcpy(node.next.?[0..ptrs.len], ptrs[0..]);
+                return .{ node, depth + 1 };
+            }
+        },
+        .pointer => |p| {
+            if (p.attrs.@"const") switch (@typeInfo(p.child)) {
+                .array => |a| {
+                    if (a.child == u8) switch (a.len) {
+                        1...N => {
+                            var node = try allocator.create(BTreeNode(N, u8));
+                            node.* = try .initLeaf(allocator);
+                            node.len = a.len;
+                            @memcpy(node.buf[0..a.len], literal);
+                            return .{ node, 1 };
+                        },
+                        else => |l| @compileLog("leaf node must have length [1,", N, "]. found: ", l),
+                    };
+                },
+                else => @compileError("unknown!"),
+            };
+        },
+        else => {},
+    }
+    @compileError("invalid btree decomposition");
+}
+
+test "test_literal_btree" {
+    const allocator = std.testing.allocator;
+    const tree1 = try literal_btree(4, "fish", allocator);
+    defer tree1.deinit(allocator);
+
+    const tree2 = try literal_btree(4, .{ "helo", ' ', "wrld" }, allocator);
+    defer tree2.deinit(allocator);
+}
+
+// Insert Tests
+// 1. insert into non-full root leaf node (leaf & non-leaf)
+// 2. insert into full root node (leaf)
+// 3. insert into non-root leaf node (non-full)
+// 4. trigger leaf split
+// 5. trigger leaf + interal split chain
+// 6. trigger new root split chain
