@@ -92,6 +92,16 @@ fn BTreeNode(comptime N: usize, comptime T: type) type {
             if (self.next) |next| allocator.free(next);
         }
 
+        fn deinitRecursive(self: Self, allocator: Allocator) void {
+            if (self.next) |next| {
+                for (0..self.len + 1) |i| {
+                    next[i].deinitRecursive(allocator);
+                    allocator.destroy(next[i]);
+                }
+            }
+            self.deinit(allocator);
+        }
+
         /// returns a node generated from consecutive values & surrounding pointers of another node
         /// differs from initialization functions by being a method
         /// useful for splitting an oversized node
@@ -779,20 +789,9 @@ pub fn BTree(comptime N: usize, comptime T: type) type {
             _ = r;
         }
 
-        // performing recursive DFS will guarantees our stack
-        // does not exceed tree depth
-        fn _recursive_free(allocator: Allocator, node: *T_Node) void {
-            if (node.next) |next| {
-                for (0..node.len + 1) |i| {
-                    _recursive_free(allocator, next[i]);
-                }
-            }
-            node.deinit(allocator);
-            allocator.destroy(node);
-        }
-
         pub fn deinit(self: Self, allocator: Allocator) void {
-            _recursive_free(allocator, self.root);
+            self.root.deinitRecursive(allocator);
+            allocator.destroy(self.root);
         }
     };
 }
@@ -802,6 +801,13 @@ pub fn BTree(comptime N: usize, comptime T: type) type {
 fn literal_btree(comptime N: usize, comptime literal: anytype, allocator: Allocator) !BTree(N, u8) {
     const root, const depth = try _recursive_build_tree(N, literal, allocator);
     return .{ .root = root, .depth = depth };
+}
+
+fn _free_nodes(comptime N: usize, comptime T: type, allocator: Allocator, nodes: []*BTreeNode(N, T)) void {
+    for (nodes) |node| {
+        node.deinitRecursive(allocator);
+        allocator.destroy(node);
+    }
 }
 
 fn _recursive_build_tree(comptime N: usize, comptime literal: anytype, allocator: Allocator) !struct { *BTreeNode(N, u8), usize } {
@@ -815,7 +821,10 @@ fn _recursive_build_tree(comptime N: usize, comptime literal: anytype, allocator
                 comptime var i = 0;
                 inline for (s.field_names, s.field_types) |n, t| {
                     if (i % 2 == 0) {
-                        ptrs[i / 2], depth = try _recursive_build_tree(N, @field(literal, n), allocator);
+                        ptrs[i / 2], depth = _recursive_build_tree(N, @field(literal, n), allocator) catch |err| {
+                            _free_nodes(N, u8, allocator, ptrs[0 .. i / 2]);
+                            return err;
+                        };
                     } else {
                         if (t == comptime_int) {
                             vals[i / 2] = @as(u8, @field(literal, n));
@@ -823,7 +832,9 @@ fn _recursive_build_tree(comptime N: usize, comptime literal: anytype, allocator
                     }
                     i += 1;
                 }
+                errdefer _free_nodes(N, u8, allocator, ptrs[0..]);
                 var node = try allocator.create(BTreeNode(N, u8));
+                errdefer allocator.destroy(node);
                 node.* = try .initInternal(allocator);
                 node.len = len / 2;
                 @memcpy(node.buf[0..vals.len], vals[0..]);
@@ -837,6 +848,7 @@ fn _recursive_build_tree(comptime N: usize, comptime literal: anytype, allocator
                     if (a.child == u8) switch (a.len) {
                         1...N => {
                             var node = try allocator.create(BTreeNode(N, u8));
+                            errdefer allocator.destroy(node);
                             node.* = try .initLeaf(allocator);
                             node.len = a.len;
                             @memcpy(node.buf[0..a.len], literal);
@@ -853,6 +865,48 @@ fn _recursive_build_tree(comptime N: usize, comptime literal: anytype, allocator
     @compileError("invalid btree decomposition");
 }
 
+fn _recursive_btree_cmp(comptime N: usize, comptime T: type, a: *const BTreeNode(N, T), b: *const BTreeNode(N, T)) bool {
+    if (a.len != b.len) return false;
+    if (!std.mem.eql(u8, a.buf[0..a.len], b.buf[0..b.len])) return false;
+    if ((a.next == null and b.next != null) or (a.next != null and b.next == null)) return false;
+    if (a.next) |a_next| {
+        if (b.next) |b_next| {
+            for (0..a.len + 1) |i| {
+                if (!_recursive_btree_cmp(N, T, a_next[i], b_next[i])) return false;
+            }
+        } else return false;
+    } else {
+        if (b.next) |_| return false;
+    }
+    return true;
+}
+
+fn btree_cmp(comptime N: usize, comptime T: type, a: BTree(N, T), b: BTree(N, T)) bool {
+    if (a.depth != b.depth) return false;
+    return _recursive_btree_cmp(N, T, a.root, b.root);
+}
+
+fn expectEqualBTree(comptime N: usize, allocator: Allocator, comptime expected: anytype, actual: BTree(N, u8)) !void {
+    const expected_tree = try literal_btree(N, expected, allocator);
+    defer expected_tree.deinit(allocator);
+    try std.testing.expect(btree_cmp(N, u8, expected_tree, actual));
+}
+
+fn test_literal_btree_mem_leak(allocator: Allocator) !void {
+    // An example depth-3 BTree (without the ordered elements)
+    //
+    //                          [ _ _ _ -]
+    //                           / | \ \____________________
+    //             _____________/  |  \________             \
+    //            /                |           \             \
+    //        [_ _--]            [ _---]     [ _---]       [ _---]
+    //      __/ | \___           _/ |         | \_          | \_
+    //     /    |     \         /   |         |   \         |   \
+    // [the-] [quiq] [brwn] [fox-] [jmpd] [ovr-] [the-] [lazy] [dog-]
+    const tree = try literal_btree(4, .{ .{ "the", ' ', "quic", ' ', "brwn" }, ' ', .{ "fox", ' ', "jmpd" }, ' ', .{ "ovr", ' ', "the" }, ' ', .{ "lazy", ' ', "dog" } }, allocator);
+    defer tree.deinit(allocator);
+}
+
 test "test_literal_btree" {
     const allocator = std.testing.allocator;
     const tree1 = try literal_btree(4, "fish", allocator);
@@ -860,6 +914,10 @@ test "test_literal_btree" {
 
     const tree2 = try literal_btree(4, .{ "helo", ' ', "wrld" }, allocator);
     defer tree2.deinit(allocator);
+
+    try expectEqualBTree(4, allocator, .{ "helo", ' ', "wrld" }, tree2);
+
+    try std.testing.checkAllAllocationFailures(allocator, test_literal_btree_mem_leak, .{});
 }
 
 // Insert Tests
