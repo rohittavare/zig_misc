@@ -105,7 +105,7 @@ fn BTreeNode(comptime N: usize, comptime T: type, comptime O: ?(fn (T, T) std.ma
         /// differs from initialization functions by being a method
         /// useful for splitting an oversized node
         fn range(self: Self, allocator: Allocator, l: usize, r: usize) !Self {
-            if (l >= r or r > self.len) return BTreeInternalError.InvalidIndex;
+            if (l > r or r > self.len) return BTreeInternalError.InvalidIndex;
             var n: Self = try .initLeaf(allocator);
             errdefer n.deinit(allocator);
             @memcpy(n.buf[0..(r - l)], self.buf[l..r]);
@@ -124,13 +124,16 @@ fn BTreeNode(comptime N: usize, comptime T: type, comptime O: ?(fn (T, T) std.ma
         /// if duplicate values exist, no guarantees on which duplicate's index is returned
         /// assumes the node contents in sorted order
         fn find(self: Self, e: T) usize {
-            var start: usize, var end: usize = .{ 0, N };
+            var start: usize, var end: usize = .{ 0, self.len - 1 };
             while (true) {
                 const mid = (end + start) / 2;
-                if (start == end) return mid;
+                if (start == end) return result: switch (Order(self.buf[mid], e)) {
+                    .lt => break :result mid + 1,
+                    else => break :result mid,
+                };
                 switch (Order(self.buf[mid], e)) {
                     .eq => return mid,
-                    .gt => end = mid - 1,
+                    .gt => end = mid,
                     .lt => start = mid + 1,
                 }
             }
@@ -327,15 +330,16 @@ test "b_tree_range" {
 test "b_tree_find" {
     const Node = BTreeNode(6, u8, null);
 
-    var node_contents = [_]u8{ 'a', 'b', 'g', 'l', 'y' };
+    var node_contents = [_]u8{ 'a', 'b', 'l', 'y', 0, 0 };
     const node: Node = .{
         .buf = node_contents[0..],
-        .len = node_contents.len,
+        .len = 4,
     };
 
     try std.testing.expectEqual(0, node.find('a'));
-    try std.testing.expectEqual(3, node.find('l'));
+    try std.testing.expectEqual(2, node.find('l'));
     try std.testing.expectEqual(2, node.find('c'));
+    try std.testing.expectEqual(4, node.find('z'));
 }
 
 test "b_tree_insert_leaf" {
@@ -758,9 +762,14 @@ pub fn BTree(comptime N: usize, comptime T: type, comptime O: ?(fn (T, T) std.ma
                 errdefer allocator.destroy(tmp);
                 tmp.* = try .initFromSplitNode(allocator, elem, l.?, r.?);
                 self.root = tmp;
-            } orelse self.depth;
+                self.depth += 1;
+                break :insert self.depth - 1;
+            };
             // free all the nodes below our split depth (replaced)
-            for (traversal.n, 0..split_depth) |n, _| allocator.destroy(n);
+            for (traversal.n[0..split_depth]) |n| {
+                n.deinit(allocator);
+                allocator.destroy(n);
+            }
         }
 
         pub fn delete(self: *Self, allocator: Allocator, e: T) void {
@@ -924,29 +933,70 @@ fn _recursive_build_tree(comptime N: usize, comptime literal: anytype, allocator
 fn expectEqualBTree(comptime N: usize, allocator: Allocator, comptime expected: anytype, actual: StringBTree(N)) !void {
     const expected_tree = try literal_btree(N, expected, allocator);
     defer expected_tree.deinit(allocator);
-    try std.testing.expect(btree_cmp(N, expected_tree, actual));
+    std.testing.expect(btree_cmp(N, expected_tree, actual)) catch |err| {
+        std.debug.print("expected: ", .{});
+        _print_tree(N, expected_tree);
+        std.debug.print("actual:   ", .{});
+        _print_tree(N, actual);
+        return err;
+    };
 }
 fn btree_cmp(comptime N: usize, a: StringBTree(N), b: StringBTree(N)) bool {
-    if (a.depth != b.depth) return false;
+    if (a.depth != b.depth) {
+        std.debug.print("depth mismatch! a={d} b={d}\n", .{ a.depth, b.depth });
+        return false;
+    }
     return _recursive_btree_cmp(N, a.root, b.root);
 }
 
 fn _recursive_btree_cmp(comptime N: usize, a: *const StringBTreeNode(N), b: *const StringBTreeNode(N)) bool {
-    if (a.len != b.len) return false;
-    for (0..a.len) |i| {
-        if (!std.mem.eql(u8, a.buf[i], b.buf[i])) return false;
+    if (a.len != b.len) {
+        std.debug.print("node lengths different!\n", .{});
+        return false;
     }
-    if ((a.next == null and b.next != null) or (a.next != null and b.next == null)) return false;
+    for (0..a.len) |i| {
+        if (!std.mem.eql(u8, a.buf[i], b.buf[i])) {
+            std.debug.print("node elements different: a={s} b={s}\n", .{ a.buf[i], b.buf[i] });
+            return false;
+        }
+    }
     if (a.next) |a_next| {
         if (b.next) |b_next| {
             for (0..a.len + 1) |i| {
                 if (!_recursive_btree_cmp(N, a_next[i], b_next[i])) return false;
             }
-        } else return false;
+        } else {
+            std.debug.print("comparding internal to leaf node!\n", .{});
+            return false;
+        }
     } else {
-        if (b.next) |_| return false;
+        if (b.next) |_| {
+            std.debug.print("comparding leaf to internal node!\n", .{});
+            return false;
+        }
     }
     return true;
+}
+
+fn _print_node_recursive(comptime N: usize, n: *StringBTreeNode(N)) void {
+    std.debug.print(".{{", .{});
+    if (n.next) |next| {
+        for (0..n.len) |i| {
+            _print_node_recursive(N, next[i]);
+            std.debug.print(", {s}, ", .{n.buf[i]});
+        }
+        _print_node_recursive(N, next[n.len]);
+    } else {
+        for (0..n.len) |i| {
+            std.debug.print("{s}{s}", .{ if (i == 0) "" else ", ", n.buf[i] });
+        }
+    }
+    std.debug.print("}}", .{});
+}
+
+fn _print_tree(comptime N: usize, tree: StringBTree(N)) void {
+    _print_node_recursive(N, tree.root);
+    std.debug.print("\n", .{});
 }
 
 /// a depth 2 BTree of animal names
@@ -963,7 +1013,7 @@ fn test_literal_btree_mem_leak(allocator: Allocator) !void {
     try std.testing.expectEqual(3, tree.depth);
 }
 
-test "test_literal_btree" {
+test "literal_btree" {
     const allocator = std.testing.allocator;
     const tree_1 = try literal_btree(4, .{ "hello", "world" }, allocator);
     defer tree_1.deinit(allocator);
@@ -979,9 +1029,53 @@ test "test_literal_btree" {
 }
 
 // Insert Tests
-// 1. insert into non-full root leaf node (leaf & non-leaf)
+// 1. insert into non-full root leaf node
 // 2. insert into full root node (leaf)
 // 3. insert into non-root leaf node (non-full)
-// 4. trigger leaf split
-// 5. trigger leaf + interal split chain
-// 6. trigger new root split chain
+// 4. trigger root split
+// 5. trigger interal split (non-root)
+
+test "insert_root_non_full" {
+    const allocator = std.testing.allocator;
+    var tree = try literal_btree(4, .{ "apple", "lemon" }, allocator);
+    defer tree.deinit(allocator);
+    try tree.insert(allocator, "banana");
+
+    try expectEqualBTree(4, allocator, .{ "apple", "banana", "lemon" }, tree);
+}
+
+test "insert_root_full" {
+    const allocator = std.testing.allocator;
+    var tree = try literal_btree(4, .{ "apple", "lemon", "mango", "tomato" }, allocator);
+    defer tree.deinit(allocator);
+    try tree.insert(allocator, "banana");
+
+    try expectEqualBTree(4, allocator, .{ .{ "apple", "banana" }, "lemon", .{ "mango", "tomato" } }, tree);
+}
+
+test "insert_leaf_non_full" {
+    const allocator = std.testing.allocator;
+    var tree = try literal_btree(4, .{ .{ "apple", "banana" }, "lemon", .{ "mango", "tomato" } }, allocator);
+    defer tree.deinit(allocator);
+    try tree.insert(allocator, "coconut");
+
+    try expectEqualBTree(4, allocator, .{ .{ "apple", "banana", "coconut" }, "lemon", .{ "mango", "tomato" } }, tree);
+}
+
+test "insert_leaf_full" {
+    const allocator = std.testing.allocator;
+    var tree = try literal_btree(4, .{ .{ "apple", "banana", "coconut", "grape" }, "lemon", .{ "mango", "tomato" } }, allocator);
+    defer tree.deinit(allocator);
+    try tree.insert(allocator, "cherry");
+
+    try expectEqualBTree(4, allocator, .{ .{ "apple", "banana" }, "cherry", .{ "coconut", "grape" }, "lemon", .{ "mango", "tomato" } }, tree);
+}
+
+test "insert_leaf_full_root" {
+    const allocator = std.testing.allocator;
+    var tree = try literal_btree(2, .{ .{ "apple", "banana" }, "coconut", .{ "grape", "lemon" }, "loquat", .{ "mango", "tomato" } }, allocator);
+    defer tree.deinit(allocator);
+    try tree.insert(allocator, "cherry");
+
+    try expectEqualBTree(2, allocator, .{ .{ .{"apple"}, "banana", .{"cherry"} }, "coconut", .{ .{ "grape", "lemon" }, "loquat", .{ "mango", "tomato" } } }, tree);
+}
